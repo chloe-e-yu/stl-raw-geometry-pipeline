@@ -1,0 +1,8 @@
+numpy
+trimesh
+fast_simplification
+rtree
+embreex
+matplotlib
+numpy-stl
+cascadio
