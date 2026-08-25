@@ -1,11 +1,11 @@
 /*
  * read_raw.c
- * no. 6에서 말한 "C의 fread로 연속 byte를 읽기 쉽다"는 부분을
- * 실제로 확인해보는 프로그램.
+ * A program to actually verify the point made in item 6 that "C's
+ * fread makes it easy to read contiguous bytes."
  *
- * 컴파일: gcc -o read_raw read_raw.c
- * 실행:  ./read_raw <raw파일> <nx> <ny> <nz>
- * 예:   ./read_raw capitol_fine.raw 114 265 72
+ * Compile: gcc -o read_raw read_raw.c
+ * Run:     ./read_raw <raw_file> <nx> <ny> <nz>
+ * Example: ./read_raw capitol_fine.raw 114 265 72
  */
 
 #include <stdio.h>
@@ -25,13 +25,13 @@ int main(int argc, char *argv[]) {
 
     FILE *f = fopen(path, "rb");
     if (f == NULL) {
-        printf("파일을 열 수 없습니다: %s\n", path);
+        printf("Could not open file: %s\n", path);
         return 1;
     }
 
     unsigned char *data = malloc(expected_size);
     if (data == NULL) {
-        printf("메모리 할당 실패\n");
+        printf("Memory allocation failed\n");
         fclose(f);
         return 1;
     }
@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
     printf("actual bytes   : %zu\n", read_count);
 
     if ((long)read_count != expected_size) {
-        printf("파일 크기가 일치하지 않습니다!\n");
+        printf("File size does not match!\n");
         free(data);
         return 1;
     }

@@ -2,76 +2,95 @@
 main.py
 STL/CAD -> voxel grid -> headerless RAW file.
 __________________________________________
-1. 배경
-   - GPU 기반 도심 바람장 LBM solver는 계산 영역을 3D 격자로 나누고,
-     각 격자가 fluid(공기)인지 solid(건물)인지 구분해야 함
-   - 지금까지는 OSM(지도 데이터)에서 건물 정보를 가져왔지만, 정밀한 custom
-     형상(직접 설계한 건물, 실험용 장애물 등)은 표현이 어려움
-   - 그래서 STL/CAD 형상을 같은 입력 형식으로 변환하는 별도 프로그램이 필요
- 
-2. RAW 파일이란
-   - 특정 표준 형식이 아니라, header 없이 데이터만 순서대로 저장한 binary 파일
-   - 각 격자(voxel)를 uint8로 저장: fluid=0, solid=1
-   - Header가 없어 격자 크기/단위/좌표축 방향은 파일 자체로 알 수 없음
-     (만드는 쪽과 읽는 쪽이 별도로 알고 있어야 함)
- 
-3. 이번 작업
-   STL/CAD 형상
-     -> 형상의 크기와 좌표 확인
-     -> 계산에 사용할 3차원 격자 정의
-     -> 각 격자가 형상 내부인지 외부인지 판정
-     -> 유체는 0, 고체는 1로 표시
-     -> 정해진 순서로 RAW 파일 저장
-     -> 생성한 파일을 다시 읽어 형상 확인
-   - 기존 OSM generator 코드 구조를 따를 필요 없음, 완전히 새 프로그램으로 작성
-   - 언어/라이브러리/입력 형식/격자 설정 방식은 자유롭게 결정
- 
-4. 첨부파일
-   - city_citymask.raw: 실제 RAW 크기/형식 예시 (400x400x250, uint8, 40MB)
-   - Chloe_OSM_Generator_Reference: OSM->RAW 변환 참고 코드 (참고용, 수정 대상 아님)
- 
-5. LBM solver와 연결하기 위해 맞춰야 하는 RAW 형식
-   - 자료형: 부호 없는 8비트 정수 uint8
-   - 유체 영역: 0, 고체 영역: 1
-   - 논리 격자 크기: (nx, ny, nz)
-   - 가장 빠르게 변하는 축: Z 방향
-   - Header 없음
-   - 정확한 파일 크기: nx * ny * nz bytes
+1. Background
+   - The GPU-based urban wind-field LBM solver divides the computational
+     domain into a 3D grid, and each grid cell must be classified as
+     fluid (air) or solid (building).
+   - Until now, building data has come from OSM (map data), but precise
+     custom shapes (custom-designed buildings, experimental obstacles,
+     etc.) are hard to represent that way.
+   - So a separate program is needed to convert STL/CAD shapes into the
+     same input format.
+
+2. What is a RAW file
+   - Not a specific standard format — just a binary file storing data in
+     order, with no header.
+   - Each grid cell (voxel) is stored as uint8: fluid=0, solid=1.
+   - Since there's no header, the grid size / units / axis directions
+     can't be recovered from the file itself (the writer and reader must
+     agree on them separately).
+
+3. This task
+   STL/CAD shape
+     -> check the shape's size and coordinates
+     -> define the 3D grid to use for computation
+     -> determine, for each grid cell, whether it's inside or outside
+        the shape
+     -> mark fluid as 0, solid as 1
+     -> save as a RAW file in the defined order
+     -> read the generated file back to verify the shape
+   - No need to follow the existing OSM generator's code structure —
+     write this as a completely new program.
+   - Language / libraries / input format / grid-setup approach are all
+     free to decide.
+
+4. Attachments
+   - city_citymask.raw: example of the actual RAW size/format
+     (400x400x250, uint8, 40MB)
+   - Chloe_OSM_Generator_Reference: reference code for OSM->RAW
+     conversion (reference only, not meant to be modified)
+
+5. RAW format required to interface with the LBM solver
+   - dtype: unsigned 8-bit integer (uint8)
+   - fluid region: 0, solid region: 1
+   - logical grid size: (nx, ny, nz)
+   - fastest-varying axis: Z direction
+   - no header
+   - exact file size: nx * ny * nz bytes
    - index = z + nz * (y + ny * x)
- 
-6. RAW 형식을 쓰는 이유
-   - STL/CAD는 형상(삼각형, 곡면 등) 표현에 유용하지만, solver는 매 계산마다
-     fluid/solid만 빠르게 확인하면 됨
-   - 전처리 단계에서 미리 RAW로 변환해두면 solver가 원본 형식을 몰라도 되고,
-     fread로 연속 byte를 읽어 GPU 메모리로 바로 복사 가능
- 
-7. 테스트 형상 선정 기준
-   - 건물/구조물처럼 형상이 명확할 것
-   - 내부/외부 구분 가능한 닫힌(watertight) 3차원 형상
-   - X, Y, Z 크기가 서로 달라 축 순서 확인이 쉬울 것
-   - 단위/실제 크기를 확인할 수 있을 것
-   - 복잡도가 적절할 것 (처음부터 복잡한 형상일 필요 없음)
-   - 출처와 사용 조건을 확인할 수 있는 공개 모델일 것
+
+6. Why use the RAW format
+   - STL/CAD is useful for representing shapes (triangles, curved
+     surfaces, etc.), but the solver only needs a fast fluid/solid
+     lookup on every computation step.
+   - Converting to RAW ahead of time in a preprocessing stage means the
+     solver doesn't need to know the original format, and can read
+     contiguous bytes via fread and copy them straight into GPU memory.
+
+7. Criteria for choosing test shapes
+   - Should look like a clearly defined building/structure.
+   - Should be a closed (watertight) 3D shape where inside/outside can
+     be distinguished.
+   - X, Y, Z sizes should differ so axis ordering is easy to verify.
+   - Units / real-world size should be verifiable.
+   - Complexity should be reasonable (doesn't need to be complex from
+     the start).
+   - Should be a public model with verifiable source and usage terms.
 _________________________
-기존 STL -> RAW 흐름은 그대로 유지
+The original STL -> RAW flow stays the same.
 
-1. 격자 크기 설정 (physical pitch)
-    - --pitch: voxel 한 칸의 실제 물리 크기(m)를 직접 지정
-    - --target-cells: 가장 긴 축을 목표를 격자 개수로 맞추고 pitch를 역산
-2. 물체의 실제 크기 설정 (scaling)
-    - --target-height: 물체의 특정 축 방향 크기를 목표 물리 크기(m)로 맞추고, 전체 형상을 같은 비율로 확대/축소
-    - --scale-axis: 어느 축을 기준으로 크기를 맞출지 (기본값 z)
-3. 물체의 방향 설정 (orientation)
-    - --facing: STL의 정면이 원래 +X를 향한다고 가정하고 원하는 방향 (+x/-x/+y/-y)을 보도록 Z축 기준 회전 
-    - --rotate-x/--rotate-y/--rotate-z: 각 축 기준 회전각(도)를 직접 지정
+1. Grid size configuration (physical pitch)
+    - --pitch: directly specify the real-world physical size (m) of one
+      voxel
+    - --target-cells: fit the longest axis to a target number of grid
+      cells and back-derive the pitch
+2. Real-world object size configuration (scaling)
+    - --target-height: scale the whole shape uniformly so the object's
+      size along a given axis matches a target physical size (m)
+    - --scale-axis: which axis to use as the basis for sizing (default z)
+3. Object orientation configuration
+    - --facing: assuming the STL's front originally faces +X, rotate
+      around the Z axis so it faces the desired direction (+x/-x/+y/-y)
+    - --rotate-x/--rotate-y/--rotate-z: directly specify the rotation
+      angle (degrees) around each axis
 
-적용 순서: 회전 -> 크기 조정 -> 격자 정의 
-(bounding box 각 단계 이후 상태를 정확히 반영함
+Application order: rotate -> scale -> define grid
+(the bounding box accurately reflects the state after each step)
 __________________________________________________
 
-Pipeline: STL 읽기 -> 격자 정의 -> 내부/외부 판정 -> fluid=0/solid=1 저장
-          -> 다시 읽어 확인
-(no.3 "이에 해볼 작업"의 흐름)
+Pipeline: read STL -> define grid -> inside/outside test -> write
+          fluid=0/solid=1 -> read back to verify
+(the flow described in "3. This task" above)
 
 Usage:
     python main.py <input.stl> <pitch> <output.raw>
@@ -112,7 +131,8 @@ def inspect_mesh(mesh, label="MESH INSPECTION"):
     print(f"STAGE 1: {label}")
     print("=" * 50)
 
-    # no. 7: "내부와 외부를 구분할 수 있는 닫힌 3차원 형상일 것"
+    # criterion 7: "should be a closed 3D shape where inside/outside
+    # can be distinguished"
     print(f"watertight: {mesh.is_watertight}")
     if not mesh.is_watertight:
         print("  WARNING: mesh is not watertight. Voxelization results")
@@ -122,8 +142,8 @@ def inspect_mesh(mesh, label="MESH INSPECTION"):
     print(f"bounds (min): {bounds[0]}")
     print(f"bounds (max): {bounds[1]}")
 
-    # no. 7: "X, Y, Z 방향의 크기가 서로 달라 축 순서가 바뀌었는지
-    # 확인하기 쉬울 것"
+    # criterion 7: "X, Y, Z sizes should differ so it's easy to check
+    # whether the axis order got swapped"
     extents = mesh.extents
     print(f"extents (x, y, z size): {extents}")
     if len(set(extents.round(6))) < 3:
@@ -216,7 +236,7 @@ def resolve_pitch(mesh, pitch, target_cells):
             )
         longest_extent = mesh.extents.max()
         pitch = longest_extent / target_cells
-        print (f"pitch: derviedd from target_cells={target_cells}"
+        print (f"pitch: dervied from target_cells={target_cells}"
                f"(longest axis={longest_extent:.6f}/{target_cells} = {pitch:.6f})")
         return pitch
     raise ValueError("either --pitch or --target-cells must be specified")
@@ -252,7 +272,7 @@ def inspect_grid(nx, ny, nz, grid_info):
     print(f"pitch: {grid_info['pitch']}")
     print(f"grid shape (nx, ny, nz): ({nx}, {ny}, {nz})")
     print(f"total voxels: {nx * ny * nz:,}")
-    # no. 5: "정확한 파일 크기 nx x ny x nz bytes"
+    # criterion 5: "exact file size nx x ny x nz bytes"
     print(f"expected RAW size: {nx * ny * nz:,} bytes")
 
 
@@ -267,7 +287,7 @@ def voxelize_mesh(mesh, nx, ny, nz, grid_info):
     print(f"testing {points.shape[0]:,} points against the mesh...")
     inside = mesh.contains(points)
 
-    # no.3: "유체는 0, 고체는 1로 표시"
+    # criterion 3: "mark fluid as 0, solid as 1"
     occupancy = inside.reshape(nx, ny, nz).astype(np.uint8)
     return occupancy
 
@@ -286,11 +306,11 @@ def inspect_occupancy(occupancy):
 
 
 def write_raw(occupancy, output_path):
-    # no. 5:
-    #   자료형: uint8, 유체=0, 고체=1, header 없음
-    #   가장 빠르게 변하는 축: Z (index = z + nz*(y + ny*x))
-    # numpy 배열이 (nx, ny, nz) shape이면 .tofile()의 기본 저장 순서
-    # (C-order)가 이 규칙과 그대로 일치함.
+    # criterion 5:
+    #   dtype: uint8, fluid=0, solid=1, no header
+    #   fastest-varying axis: Z (index = z + nz*(y + ny*x))
+    # If the numpy array has shape (nx, ny, nz), .tofile()'s default
+    # storage order (C-order) matches this convention exactly.
     assert occupancy.dtype == np.uint8, "occupancy must be uint8"
     occupancy.tofile(output_path)
 
@@ -303,7 +323,7 @@ def write_raw(occupancy, output_path):
 def read_raw(raw_path, nx, ny, nz):
     data = np.fromfile(raw_path, dtype=np.uint8)
 
-    # no. 5: "정확한 파일 크기 nx x ny x nz bytes"
+    # criterion 5: "exact file size nx x ny x nz bytes"
     expected_size = nx * ny * nz
     assert data.size == expected_size, (
         f"file size mismatch: expected {expected_size}, got {data.size}"
@@ -312,7 +332,7 @@ def read_raw(raw_path, nx, ny, nz):
 
 
 def verify_raw(raw_path, nx, ny, nz):
-    # no.3: "생성한 파일을 다시 읽어 형상 확인"
+    # criterion 3: "read the generated file back to verify the shape"
     print("=" * 50)
     print("STAGE 5: VERIFY RAW")
     print("=" * 50)
@@ -328,8 +348,13 @@ def verify_raw(raw_path, nx, ny, nz):
     return occupancy
 
 
-def visualize(occupancy, png_path="verify_output.png"):
+def visualize(occupancy, png_path=None):
+    import datetime
     import matplotlib.pyplot as plt
+
+    if png_path is None:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        png_path = f"verify_output_{timestamp}.png"
 
     solid_coords = np.argwhere(occupancy == 1)
 
@@ -385,7 +410,7 @@ def main():
             "--facing and --rotate-x/--rotate-y/--rotate-z cannot be used "
             "together, USe only one of them"
         )
-    # no.3 흐름: 형상 읽기 -> 크기/좌표 확인
+    # task-3 flow: read shape -> check size/coordinates
     mesh = load_mesh(args.stl_path)
     mesh = simplify_if_needed(mesh, args.max_faces)
     inspect_mesh(mesh,label="MESH INSPECTION (original)")
@@ -402,23 +427,25 @@ def main():
     if args.facing is not None or has_explicit_rotation or args.target_height is not None:
         inspect_mesh(mesh, label="MESH INSPECTION (after transform)")
 
-    # no.3 흐름: 3차원 격자 정의
+    # task-3 flow: define the 3D grid
     pitch = resolve_pitch(mesh, args.pitch, args.target_cells)
     nx, ny, nz, grid_info = define_grid(mesh, pitch)
     inspect_grid(nx, ny, nz, grid_info)
 
-    # no.3 흐름: 내부/외부 판정, 유체=0/고체=1
+    # task-3 flow: inside/outside test, fluid=0/solid=1
     occupancy = voxelize_mesh(mesh, nx, ny, nz, grid_info)
     inspect_occupancy(occupancy)
 
-    # no.3 흐름: RAW 파일 저장
+    # task-3 flow: write the RAW file
     write_raw(occupancy, args.output_raw)
 
-    # no.3 흐름: 생성한 파일을 다시 읽어 형상 확인
+    # task-3 flow: read the generated file back to verify the shape
     verify_raw(args.output_raw, nx, ny, nz)
 
     if args.visualize:
-        visualize(occupancy)
+        from pathlib import Path
+        png_name = f"{Path(args.output_raw).stem}_verify.png"
+        visualize(occupancy, png_name)
 
     print("=" * 50)
     print(f"DONE. grid=({nx},{ny},{nz})  pitch={pitch:.6f}  "

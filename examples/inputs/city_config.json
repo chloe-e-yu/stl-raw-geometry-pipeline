@@ -1,0 +1,44 @@
+
+{
+  "domain": {
+    "size_m": [
+      120,
+      100,
+      40
+    ],
+    "pitch": 1
+  },
+  "buildings": [
+    {
+      "stl": "building_tower.stl",
+      "position_m": [
+        10,
+        10,
+        0
+      ],
+      "target_height": 30,
+      "scale_axis": "z"
+    },
+    {
+      "stl": "building_cylinder.stl",
+      "position_m": [
+        50,
+        40,
+        0
+      ],
+      "target_height": 18,
+      "scale_axis": "z"
+    },
+    {
+      "stl": "building_wide.stl",
+      "position_m": [
+        80,
+        20,
+        0
+      ],
+      "target_height": 12,
+      "scale_axis": "z",
+      "facing": "posy"
+    }
+  ]
+}
