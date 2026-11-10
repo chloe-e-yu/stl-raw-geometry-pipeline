@@ -4,6 +4,8 @@ A preprocessing pipeline that converts STL / CAD (STEP) geometry into the voxel 
 
 Built during a research internship at [**Nuclear Energy System Laboratory (ESLAB)**](https://snueslab.com), Dept. of Nuclear Engineering, Seoul National University (Summer 2026). 
 
+📄 [Final presentation at ESLAB (Aug 2026, PDF)](docs/ESLAB_presentation_2026-08.pdf)
+
 <p align="center">
   <img src="examples/outputs/capitol_verify.png" width="32%" alt="Voxelized U.S. Capitol">
   <img src="examples/outputs/eros_out2_verify.png" width="32%" alt="Voxelized asteroid Eros">
