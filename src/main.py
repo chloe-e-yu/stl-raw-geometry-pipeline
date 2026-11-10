@@ -1,103 +1,31 @@
 """
 main.py
-STL/CAD -> voxel grid -> headerless RAW file.
-__________________________________________
-1. Background
-   - The GPU-based urban wind-field LBM solver divides the computational
-     domain into a 3D grid, and each grid cell must be classified as
-     fluid (air) or solid (building).
-   - Until now, building data has come from OSM (map data), but precise
-     custom shapes (custom-designed buildings, experimental obstacles,
-     etc.) are hard to represent that way.
-   - So a separate program is needed to convert STL/CAD shapes into the
-     same input format.
+Convert an STL/STEP model into a headerless RAW voxel grid for a GPU
+Lattice Boltzmann (LBM) urban wind solver.
 
-2. What is a RAW file
-   - Not a specific standard format — just a binary file storing data in
-     order, with no header.
-   - Each grid cell (voxel) is stored as uint8: fluid=0, solid=1.
-   - Since there's no header, the grid size / units / axis directions
-     can't be recovered from the file itself (the writer and reader must
-     agree on them separately).
+The solver classifies every grid cell as fluid (air) or solid (building).
+This script produces that input from arbitrary CAD geometry, filling the
+gaps that OpenStreetMap-based building data can't represent.
 
-3. This task
-   STL/CAD shape
-     -> check the shape's size and coordinates
-     -> define the 3D grid to use for computation
-     -> determine, for each grid cell, whether it's inside or outside
-        the shape
-     -> mark fluid as 0, solid as 1
-     -> save as a RAW file in the defined order
-     -> read the generated file back to verify the shape
-   - No need to follow the existing OSM generator's code structure —
-     write this as a completely new program.
-   - Language / libraries / input format / grid-setup approach are all
-     free to decide.
+RAW format
+    dtype: uint8 (fluid = 0, solid = 1)
+    order: C-order, z fastest -> index = z + nz * (y + ny * x)
+    header: none (file size is exactly nx * ny * nz bytes)
 
-4. Attachments
-   - city_citymask.raw: example of the actual RAW size/format
-     (400x400x250, uint8, 40MB)
-   - Chloe_OSM_Generator_Reference: reference code for OSM->RAW
-     conversion (reference only, not meant to be modified)
+Pipeline
+    load -> simplify (optional) -> rotate -> scale -> define grid
+    -> inside/outside test (ray casting) -> write RAW -> read back to verify
 
-5. RAW format required to interface with the LBM solver
-   - dtype: unsigned 8-bit integer (uint8)
-   - fluid region: 0, solid region: 1
-   - logical grid size: (nx, ny, nz)
-   - fastest-varying axis: Z direction
-   - no header
-   - exact file size: nx * ny * nz bytes
-   - index = z + nz * (y + ny * x)
-
-6. Why use the RAW format
-   - STL/CAD is useful for representing shapes (triangles, curved
-     surfaces, etc.), but the solver only needs a fast fluid/solid
-     lookup on every computation step.
-   - Converting to RAW ahead of time in a preprocessing stage means the
-     solver doesn't need to know the original format, and can read
-     contiguous bytes via fread and copy them straight into GPU memory.
-
-7. Criteria for choosing test shapes
-   - Should look like a clearly defined building/structure.
-   - Should be a closed (watertight) 3D shape where inside/outside can
-     be distinguished.
-   - X, Y, Z sizes should differ so axis ordering is easy to verify.
-   - Units / real-world size should be verifiable.
-   - Complexity should be reasonable (doesn't need to be complex from
-     the start).
-   - Should be a public model with verifiable source and usage terms.
-_________________________
-The original STL -> RAW flow stays the same.
-
-1. Grid size configuration (physical pitch)
-    - --pitch: directly specify the real-world physical size (m) of one
-      voxel
-    - --target-cells: fit the longest axis to a target number of grid
-      cells and back-derive the pitch
-2. Real-world object size configuration (scaling)
-    - --target-height: scale the whole shape uniformly so the object's
-      size along a given axis matches a target physical size (m)
-    - --scale-axis: which axis to use as the basis for sizing (default z)
-3. Object orientation configuration
-    - --facing: assuming the STL's front originally faces +X, rotate
-      around the Z axis so it faces the desired direction (+x/-x/+y/-y)
-    - --rotate-x/--rotate-y/--rotate-z: directly specify the rotation
-      angle (degrees) around each axis
-
-Application order: rotate -> scale -> define grid
-(the bounding box accurately reflects the state after each step)
-__________________________________________________
-
-Pipeline: read STL -> define grid -> inside/outside test -> write
-          fluid=0/solid=1 -> read back to verify
-(the flow described in "3. This task" above)
+Transforms are applied in a fixed order (rotate -> scale -> grid) so the
+bounding box always reflects the final geometry.
 
 Usage:
-    python main.py <input.stl> <pitch> <output.raw>
-    [--pitch P | --target-cells N]
-    [--target-height H [--scale-axis {x,y,z}]]
-    [--facing {posx, negx, posy, negy} | --rotate-x D --rotate-y D --rotate-z D]
-    [--visualize] [--max-faces N]
+    python main.py <input.stl|.step> <output.raw> (--pitch P | --target-cells N)
+        [--target-height H] [--scale-axis {x,y,z}]
+        [--facing {posx,negx,posy,negy} | --rotate-x D --rotate-y D --rotate-z D]
+        [--visualize] [--max-faces N]
+
+See README.md for details and validation results.
 """
 
 import argparse
@@ -131,8 +59,7 @@ def inspect_mesh(mesh, label="MESH INSPECTION"):
     print(f"STAGE 1: {label}")
     print("=" * 50)
 
-    # criterion 7: "should be a closed 3D shape where inside/outside
-    # can be distinguished"
+    # inside/outside testing requires a closed (watertight) mesh
     print(f"watertight: {mesh.is_watertight}")
     if not mesh.is_watertight:
         print("  WARNING: mesh is not watertight. Voxelization results")
@@ -142,8 +69,7 @@ def inspect_mesh(mesh, label="MESH INSPECTION"):
     print(f"bounds (min): {bounds[0]}")
     print(f"bounds (max): {bounds[1]}")
 
-    # criterion 7: "X, Y, Z sizes should differ so it's easy to check
-    # whether the axis order got swapped"
+    # distinct X/Y/Z sizes make it easy to spot swapped axes
     extents = mesh.extents
     print(f"extents (x, y, z size): {extents}")
     if len(set(extents.round(6))) < 3:
@@ -169,7 +95,7 @@ def orient_mesh(mesh, facing, rotate_x, rotate_y, rotate_z):
 
     if facing is not None:
         angle_deg = FACING_TO_Z_ANGLE_DEG[facing]
-        print(f"oreintation: facing={facing} -> rotating {angle_deg} deg around Z")
+        print(f"orientation: facing={facing} -> rotating {angle_deg} deg around Z")
         matrix = trimesh.transformations.rotation_matrix(
             np.radians(angle_deg), [0,0,1], point=center
             )
@@ -194,7 +120,7 @@ AXIS_INDEX = {"x":0, "y":1, "z":2}
 
 def scale_mesh(mesh, target_height, scale_axis):
     """scale the mesh uniformly so that its extent along scale_axis equals
-    targtet_height(physical units, e.g. meters)
+    target_height (physical units, e.g. meters)
     """
     if target_height is None:
         print("scaling: no scaling applied (using original STL, coordinate size)")
@@ -221,7 +147,7 @@ def scale_mesh(mesh, target_height, scale_axis):
 def resolve_pitch(mesh, pitch, target_cells):
     """ use pitch directly if given. 
         Otherwise derive pitch from target_cells: 
-            the longest axis extent by divided by target_cells. 
+            the longest axis extent divided by target_cells. 
     """
     if pitch is not None:
         if pitch <= 0:
@@ -236,7 +162,7 @@ def resolve_pitch(mesh, pitch, target_cells):
             )
         longest_extent = mesh.extents.max()
         pitch = longest_extent / target_cells
-        print (f"pitch: dervied from target_cells={target_cells}"
+        print (f"pitch: derived from target_cells={target_cells} "
                f"(longest axis={longest_extent:.6f}/{target_cells} = {pitch:.6f})")
         return pitch
     raise ValueError("either --pitch or --target-cells must be specified")
@@ -272,7 +198,7 @@ def inspect_grid(nx, ny, nz, grid_info):
     print(f"pitch: {grid_info['pitch']}")
     print(f"grid shape (nx, ny, nz): ({nx}, {ny}, {nz})")
     print(f"total voxels: {nx * ny * nz:,}")
-    # criterion 5: "exact file size nx x ny x nz bytes"
+    # RAW file size must be exactly nx * ny * nz bytes
     print(f"expected RAW size: {nx * ny * nz:,} bytes")
 
 
@@ -287,7 +213,7 @@ def voxelize_mesh(mesh, nx, ny, nz, grid_info):
     print(f"testing {points.shape[0]:,} points against the mesh...")
     inside = mesh.contains(points)
 
-    # criterion 3: "mark fluid as 0, solid as 1"
+    # fluid = 0, solid = 1
     occupancy = inside.reshape(nx, ny, nz).astype(np.uint8)
     return occupancy
 
@@ -306,7 +232,7 @@ def inspect_occupancy(occupancy):
 
 
 def write_raw(occupancy, output_path):
-    # criterion 5:
+    # RAW format:
     #   dtype: uint8, fluid=0, solid=1, no header
     #   fastest-varying axis: Z (index = z + nz*(y + ny*x))
     # If the numpy array has shape (nx, ny, nz), .tofile()'s default
@@ -323,7 +249,7 @@ def write_raw(occupancy, output_path):
 def read_raw(raw_path, nx, ny, nz):
     data = np.fromfile(raw_path, dtype=np.uint8)
 
-    # criterion 5: "exact file size nx x ny x nz bytes"
+    # file size must be exactly nx * ny * nz bytes
     expected_size = nx * ny * nz
     assert data.size == expected_size, (
         f"file size mismatch: expected {expected_size}, got {data.size}"
@@ -332,7 +258,7 @@ def read_raw(raw_path, nx, ny, nz):
 
 
 def verify_raw(raw_path, nx, ny, nz):
-    # criterion 3: "read the generated file back to verify the shape"
+    # read the generated file back to check size and values
     print("=" * 50)
     print("STAGE 5: VERIFY RAW")
     print("=" * 50)
@@ -384,10 +310,10 @@ def main():
                             help="voxel size in physical units (e.g. meters)")
     grid_group.add_argument("--target-cells", type=int, 
                                 help="derive pitch so the longest axis has this many cells")
-    parser.add_argument("--target-height", type=float, default=None, help="scale the mesh so its size along --scale-axis"
+    parser.add_argument("--target-height", type=float, default=None, help="scale the mesh so its size along --scale-axis "
                         "equals this value (physical units, e.g. meters)")
     parser.add_argument("--scale-axis", choices = ["x", "y", "z"], default="z",
-                        help="which axis --target-height applies to(defalut: z)")
+                        help="which axis --target-height applies to (default: z)")
     parser.add_argument("--facing", choices=["posx", "negx", "posy", "negy"], default=None, 
                         help="rotate so the mesh's front (assumed +x) "
                         "points this direction")
@@ -408,9 +334,9 @@ def main():
     if args.facing is not None and has_explicit_rotation:
         parser.error(
             "--facing and --rotate-x/--rotate-y/--rotate-z cannot be used "
-            "together, USe only one of them"
+            "together. Use only one of them."
         )
-    # task-3 flow: read shape -> check size/coordinates
+    # read the shape and check its size/coordinates
     mesh = load_mesh(args.stl_path)
     mesh = simplify_if_needed(mesh, args.max_faces)
     inspect_mesh(mesh,label="MESH INSPECTION (original)")
@@ -427,19 +353,19 @@ def main():
     if args.facing is not None or has_explicit_rotation or args.target_height is not None:
         inspect_mesh(mesh, label="MESH INSPECTION (after transform)")
 
-    # task-3 flow: define the 3D grid
+    # define the 3D grid
     pitch = resolve_pitch(mesh, args.pitch, args.target_cells)
     nx, ny, nz, grid_info = define_grid(mesh, pitch)
     inspect_grid(nx, ny, nz, grid_info)
 
-    # task-3 flow: inside/outside test, fluid=0/solid=1
+    # inside/outside test, fluid=0 / solid=1
     occupancy = voxelize_mesh(mesh, nx, ny, nz, grid_info)
     inspect_occupancy(occupancy)
 
-    # task-3 flow: write the RAW file
+    # write the RAW file
     write_raw(occupancy, args.output_raw)
 
-    # task-3 flow: read the generated file back to verify the shape
+    # read the generated file back to verify it
     verify_raw(args.output_raw, nx, ny, nz)
 
     if args.visualize:
